@@ -1,6 +1,8 @@
 ﻿using System;
 using System.IO;
 using System.Text;
+using System.Data;
+using System.Data.SqlClient;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,9 +19,13 @@ namespace TwitterConnect
         private static System.Timers.Timer timer;
         private static string streamTerm;
         private static int counter = 0;
+        private static int rowCounter = 0;
         private static CancellationTokenSource cts;
         private static bool feedAlive;
         private static bool timerAlive;
+
+        private const string connectionString = "Server=localhost\\SQLEXPRESS; Initial Catalog=TwitterData; User ID=sa; Password=Password123";
+        private static SqlConnection conn;
 
         static void Main(string[] args)
         {
@@ -29,39 +35,41 @@ namespace TwitterConnect
                 "qQZqhIAQDQb0K0Q6ZCaFyyGyfmsyvvG3UOfBjCBaH11El");
 
             
-            Console.WriteLine("Livestream or search?");
-            string operation = Console.ReadLine();
+            Console.WriteLine("Enter tracking term");
+            streamTerm = Console.ReadLine();
+            string operation = string.Empty;
             while (operation != "exit")
             {
-                if (operation == "stream" && !feedAlive)
+                if (!feedAlive)
                 {
                     StreamSearch();
                 }
-                else if (operation == "search")
-                {
-                    StandardSearch();
-                }
-                Thread.Sleep(5000);
+                Thread.Sleep(1000);
                 if(!feedAlive && !timerAlive)
                 {
                     Console.WriteLine("Anything else? stream/search/exit");
                     operation = Console.ReadLine();
+                }
+                else if (feedAlive && timerAlive)
+                {
+                    if (counter%60 == 0 && counter != 0)
+                    {
+                        Console.WriteLine("Stream has been going for {0} minutes.", counter/60);
+                        Console.WriteLine("{0} rows has been inserted.", rowCounter);
+                    }
                 }
             }
         }
 
         static void StreamSearch()
         {
-            Console.WriteLine("For what do you wanna stream?");
-            streamTerm = Console.ReadLine();
-            
             cts = new CancellationTokenSource();
 
             new Thread(() =>
             {
                 Work(cts.Token);
             }).Start();
-
+            
             new Thread(() =>
             {
                 Timing(cts.Token);
@@ -92,7 +100,6 @@ namespace TwitterConnect
             timer.Elapsed += (sender, args) =>
             {
                 counter++;
-                Debug.WriteLine(counter);
             };
             timer.Start();
 
@@ -104,18 +111,15 @@ namespace TwitterConnect
                     timerAlive = false;
                     return;
                 }
-                else if (counter == 60)
-                {
-                    timer.Stop();
-                    Console.WriteLine("Streaming stopped after 60 seconds.");
-                    timerAlive = false;
-                    return;
-                }
             }
         }
 
         private static void Work(CancellationToken cancellationToken)
         {
+            string[] searchWords = new string[] { "sd", "svergie", "demokraterna", "sverigedemokraterna", "2018", "sd2018", "jimmie", "åkesson" };
+
+            conn = new SqlConnection(connectionString);
+
             feedAlive = true;
 
             var stream = Tweetinvi.Stream.CreateFilteredStream();
@@ -123,48 +127,64 @@ namespace TwitterConnect
 
             stream.MatchingTweetReceived += (sender, arg) =>
             {
-                CheckTweets(arg.Tweet);
+                CheckTweets(arg.Tweet, searchWords, conn);
             };
 
             stream.StartStreamMatchingAllConditionsAsync();
 
             while (true)
             {
-                if (cancellationToken.IsCancellationRequested || counter == 60)
+                if (cancellationToken.IsCancellationRequested)
                 {
                     stream.StopStream();
                     feedAlive = false;
+                    Console.WriteLine("Rows inserted: {0}", rowCounter);
+                    Console.WriteLine("Streamed for {0} seconds.", counter);
                     return;
                 }
             }
         }
 
-        static void StandardSearch()
+        static void CheckTweets(ITweet tweet, string[] searchWords, SqlConnection conn)
         {
-            Console.WriteLine("What do you want to find?");
-            string searchTerm = Console.ReadLine();
-            var searchParams = new SearchTweetsParameters(searchTerm)
-            {
-                SearchType = SearchResultType.Recent
-            };
+            string tweetText = tweet.Text.ToLower();
 
-            var results = Search.SearchTweets(searchParams);
-
-            foreach(ITweet tweet in results)
+            foreach (string word in searchWords)
             {
-                Console.WriteLine("------------------------------------------------------------");
-                Console.WriteLine(tweet.CreatedBy);
-                Console.WriteLine(tweet.Text);
-                Console.WriteLine("------------------------------------------------------------");
+                if (tweetText.Contains(word))
+                {
+                    SqlCommand cmd = new SqlCommand("INSERT INTO SD_STATS" +
+                        " VALUES(" +
+                        "@UserName, @IsRetweet, @OriginalPoster, @OriginalTweetedTime, @Retweets, @Favourites, @OriginalTweetText, @TweetText, @TweetedTime, @Keyword);"
+                        , conn);
+
+                    cmd.Parameters.AddWithValue(@"@UserName", tweet.CreatedBy.ToString());
+                    cmd.Parameters.AddWithValue(@"@IsRetweet", tweet.IsRetweet ? 1 : 0);
+                    cmd.Parameters.AddWithValue(@"@OriginalPoster", tweet.IsRetweet ? tweet.RetweetedTweet.CreatedBy.ToString() : (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue(@"@OriginalTweetedTime", tweet.IsRetweet ? tweet.RetweetedTweet.CreatedAt : (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue(@"@Retweets", tweet.IsRetweet ? tweet.RetweetedTweet.RetweetCount : (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue(@"@Favourites", tweet.IsRetweet ? tweet.RetweetedTweet.FavoriteCount : (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue(@"@OriginalTweetText", tweet.IsRetweet ? tweet.RetweetedTweet.FullText : (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue(@"@TweetText", tweet.FullText);
+                    cmd.Parameters.AddWithValue(@"@TweetedTime", tweet.CreatedAt);
+                    cmd.Parameters.AddWithValue(@"@Keyword", word);
+
+                    try
+                    {
+                        conn.Open();
+                        cmd.ExecuteNonQuery();
+                        rowCounter++;
+                    }
+                    catch (SqlException exc)
+                    {
+                        Debug.WriteLine(exc.Message);
+                    }
+                    finally
+                    {
+                        conn.Close();
+                    }
+                }
             }
-        }
-
-        static void CheckTweets(ITweet tweet)
-        {
-            Console.WriteLine("------------------------------------------------------------");
-            Console.WriteLine(tweet.CreatedBy);
-            Console.WriteLine(tweet.Text);
-            Console.WriteLine("------------------------------------------------------------");
         }
     }
 }
