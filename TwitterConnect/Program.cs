@@ -37,8 +37,8 @@ namespace TwitterConnect
             
             Console.WriteLine("Enter tracking term");
             streamTerm = Console.ReadLine();
-            string operation = string.Empty;
-            while (operation != "exit")
+            string operation = "stream";
+            while (operation != "exit" && operation == "stream")
             {
                 if (!feedAlive)
                 {
@@ -47,15 +47,24 @@ namespace TwitterConnect
                 Thread.Sleep(1000);
                 if(!feedAlive && !timerAlive)
                 {
-                    Console.WriteLine("Anything else? stream/search/exit");
+                    Console.WriteLine("Anything else? stream/exit");
                     operation = Console.ReadLine();
+                    if (operation == "exit")
+                    {
+                        break;
+                    }
+                    else
+                    {
+                        Console.WriteLine("Enter tracking term");
+                        streamTerm = Console.ReadLine();
+                    }
                 }
                 else if (feedAlive && timerAlive)
                 {
                     if (counter%60 == 0 && counter != 0)
                     {
-                        Console.WriteLine("Stream has been going for {0} minutes.", counter/60);
-                        Console.WriteLine("{0} rows has been inserted.", rowCounter);
+                        Console.WriteLine("Stream has been running for {0} minute(s).", counter/60);
+                        Console.WriteLine("{0} tweets has matched.", rowCounter);
                     }
                 }
             }
@@ -116,7 +125,7 @@ namespace TwitterConnect
 
         private static void Work(CancellationToken cancellationToken)
         {
-            string[] searchWords = new string[] { "sd", "svergie", "demokraterna", "sverigedemokraterna", "2018", "sd2018", "jimmie", "åkesson" };
+            string[] searchWords = new string[] { "sd", "svergie demokraterna", "sverigedemokraterna", "sd2018", "jimmie", "åkesson" };
 
             conn = new SqlConnection(connectionString);
 
@@ -140,6 +149,8 @@ namespace TwitterConnect
                     feedAlive = false;
                     Console.WriteLine("Rows inserted: {0}", rowCounter);
                     Console.WriteLine("Streamed for {0} seconds.", counter);
+                    rowCounter = 0;
+                    counter = 0;
                     return;
                 }
             }
@@ -147,42 +158,172 @@ namespace TwitterConnect
 
         static void CheckTweets(ITweet tweet, string[] searchWords, SqlConnection conn)
         {
-            string tweetText = tweet.Text.ToLower();
+            string tweetText = tweet.FullText.ToLower();
+
+            List<string> Keywords = new List<string>();
 
             foreach (string word in searchWords)
             {
-                if (tweetText.Contains(word))
+                if (tweetText.Contains(" " + word + " "))
                 {
-                    SqlCommand cmd = new SqlCommand("INSERT INTO SD_STATS" +
-                        " VALUES(" +
-                        "@UserName, @IsRetweet, @OriginalPoster, @OriginalTweetedTime, @Retweets, @Favourites, @OriginalTweetText, @TweetText, @TweetedTime, @Keyword);"
-                        , conn);
+                    Keywords.Add(word);
+                }
 
-                    cmd.Parameters.AddWithValue(@"@UserName", tweet.CreatedBy.ToString());
-                    cmd.Parameters.AddWithValue(@"@IsRetweet", tweet.IsRetweet ? 1 : 0);
-                    cmd.Parameters.AddWithValue(@"@OriginalPoster", tweet.IsRetweet ? tweet.RetweetedTweet.CreatedBy.ToString() : (object)DBNull.Value);
-                    cmd.Parameters.AddWithValue(@"@OriginalTweetedTime", tweet.IsRetweet ? tweet.RetweetedTweet.CreatedAt : (object)DBNull.Value);
-                    cmd.Parameters.AddWithValue(@"@Retweets", tweet.IsRetweet ? tweet.RetweetedTweet.RetweetCount : (object)DBNull.Value);
-                    cmd.Parameters.AddWithValue(@"@Favourites", tweet.IsRetweet ? tweet.RetweetedTweet.FavoriteCount : (object)DBNull.Value);
-                    cmd.Parameters.AddWithValue(@"@OriginalTweetText", tweet.IsRetweet ? tweet.RetweetedTweet.FullText : (object)DBNull.Value);
-                    cmd.Parameters.AddWithValue(@"@TweetText", tweet.FullText);
-                    cmd.Parameters.AddWithValue(@"@TweetedTime", tweet.CreatedAt);
-                    cmd.Parameters.AddWithValue(@"@Keyword", word);
+                if (tweet.QuotedTweet != null)
+                {
+                    if (tweet.QuotedTweet.FullText.ToLower().Contains(" " + word + " "))
+                    {
+                        Keywords.Add(word);
+                    }
+                }
 
-                    try
+                if (tweet.IsRetweet)
+                {
+                    if (tweet.RetweetedTweet.FullText.ToLower().Contains(" " + word + " "))
                     {
-                        conn.Open();
-                        cmd.ExecuteNonQuery();
-                        rowCounter++;
+                        Keywords.Add(word);
                     }
-                    catch (SqlException exc)
+                }
+            }
+
+            if (Keywords.Count > 0)
+            {
+                string keyWord = string.Empty;
+
+                foreach (string keyword in Keywords)
+                {
+                    keyWord = keyword + "; ";
+                }
+
+                SqlCommand RetweetCmd = new SqlCommand();
+                SqlCommand QuoteCmd = new SqlCommand();
+
+                SqlCommand TweetCmd = new SqlCommand("INSERT INTO Tweets VALUES(" +
+                "@UserID, @UserName, @UserLocation, @TweetID, @TweetText, @RetweetID, @QuoteID, @RetweetCount, @FavouriteCount, @Keywords, @QuoteCount, @Published, @URL);");
+
+                TweetCmd.Parameters.AddWithValue(@"@UserID", tweet.CreatedBy.Id);
+                TweetCmd.Parameters.AddWithValue(@"@UserName", tweet.CreatedBy.ToString());
+                TweetCmd.Parameters.AddWithValue(@"@UserLocation", String.IsNullOrEmpty(tweet.CreatedBy.Location) ? (object)DBNull.Value : tweet.CreatedBy.Location);
+                TweetCmd.Parameters.AddWithValue(@"@TweetID", tweet.Id);
+                TweetCmd.Parameters.AddWithValue(@"@TweetText", tweet.FullText);
+                TweetCmd.Parameters.AddWithValue(@"@RetweetID", tweet.IsRetweet ? tweet.RetweetedTweet.Id : (object)DBNull.Value);
+                TweetCmd.Parameters.AddWithValue(@"@QuoteID", tweet.QuotedTweet == null ? (object)DBNull.Value : tweet.QuotedTweet.Id);
+                TweetCmd.Parameters.AddWithValue(@"@RetweetCount", tweet.RetweetCount);
+                TweetCmd.Parameters.AddWithValue(@"@FavouriteCount", tweet.FavoriteCount);
+                TweetCmd.Parameters.AddWithValue(@"@Keywords", keyWord);
+                TweetCmd.Parameters.AddWithValue(@"@QuoteCount", tweet.QuoteCount);
+                TweetCmd.Parameters.AddWithValue(@"@Published", tweet.CreatedAt);
+                TweetCmd.Parameters.AddWithValue(@"@URL", tweet.Url);
+
+                if (tweet.IsRetweet)
+                {
+                    RetweetCmd.CommandText = "INSERT INTO Retweets VALUES(" +
+                        "@UserID, @UserName, @UserLocation, @TweetID, @TweetText, @RetweetCount, @FavouriteCount, @QuoteCount, @Published, @URL);";
+
+                    RetweetCmd.Parameters.AddWithValue(@"@UserID", tweet.RetweetedTweet.CreatedBy.Id);
+                    RetweetCmd.Parameters.AddWithValue(@"@UserName", tweet.RetweetedTweet.CreatedBy.ToString());
+                    RetweetCmd.Parameters.AddWithValue(@"@UserLocation", String.IsNullOrEmpty(tweet.RetweetedTweet.CreatedBy.Location) ? (object)DBNull.Value : tweet.RetweetedTweet.CreatedBy.Location);
+                    RetweetCmd.Parameters.AddWithValue(@"@TweetID", tweet.RetweetedTweet.Id);
+                    RetweetCmd.Parameters.AddWithValue(@"@TweetText", tweet.RetweetedTweet.FullText);
+                    RetweetCmd.Parameters.AddWithValue(@"@RetweetCount", tweet.RetweetedTweet.RetweetCount);
+                    RetweetCmd.Parameters.AddWithValue(@"@FavouriteCount", tweet.RetweetedTweet.FavoriteCount);
+                    RetweetCmd.Parameters.AddWithValue(@"@QuoteCount", tweet.RetweetedTweet.QuoteCount);
+                    RetweetCmd.Parameters.AddWithValue(@"@Published", tweet.RetweetedTweet.CreatedAt);
+                    RetweetCmd.Parameters.AddWithValue(@"@URL", tweet.RetweetedTweet.Url);
+                }
+
+                if (tweet.QuotedTweet != null)
+                {
+                    QuoteCmd.CommandText = "INSERT INTO QuotedTweets VALUES(" +
+                        "@UserID, @UserName, @UserLocation, @TweetID, @TweetText, @RetweetCount, @FavouriteCount, @QuotedCount, @Published, @URL);";
+
+                    QuoteCmd.Parameters.AddWithValue(@"@UserID", tweet.QuotedTweet.CreatedBy.Id);
+                    QuoteCmd.Parameters.AddWithValue(@"@UserName", tweet.QuotedTweet.CreatedBy.ToString());
+                    QuoteCmd.Parameters.AddWithValue(@"@UserLocation", String.IsNullOrEmpty(tweet.QuotedTweet.CreatedBy.Location) ? (object)DBNull.Value : tweet.QuotedTweet.CreatedBy.Location);
+                    QuoteCmd.Parameters.AddWithValue(@"@TweetID", tweet.QuotedTweet.Id);
+                    QuoteCmd.Parameters.AddWithValue(@"@TweetText", tweet.QuotedTweet.FullText);
+                    QuoteCmd.Parameters.AddWithValue(@"@RetweetCount", tweet.QuotedTweet.RetweetCount);
+                    QuoteCmd.Parameters.AddWithValue(@"@FavouriteCount", tweet.QuotedTweet.FavoriteCount);
+                    QuoteCmd.Parameters.AddWithValue(@"@QuotedCount", tweet.QuotedTweet.QuoteCount);
+                    QuoteCmd.Parameters.AddWithValue(@"@Published", tweet.QuotedTweet.CreatedAt);
+                    QuoteCmd.Parameters.AddWithValue(@"@URL", tweet.QuotedTweet.Url);
+                }
+
+                try
+                {
+                    conn.Open();
+
+                    TweetCmd.Connection = conn;
+
+                    TweetCmd.ExecuteNonQuery();
+
+                    if (tweet.IsRetweet)
                     {
-                        Debug.WriteLine(exc.Message);
+                        RetweetCmd.Connection = conn;
+
+                        using (SqlCommand cmd = new SqlCommand())
+                        {
+                            cmd.Connection = conn;
+                            cmd.CommandText = "SELECT 1 FROM Retweets WHERE TweetID = " + tweet.RetweetedTweet.Id + ";";
+                            SqlDataReader reader = cmd.ExecuteReader();
+                            if (reader.HasRows)
+                            {
+                                reader.Close();
+
+                                RetweetCmd.CommandText = "UPDATE Retweets " +
+                                    "SET RetweetCount = " + tweet.RetweetedTweet.RetweetCount + ", " +
+                                    "FavouriteCount = " + tweet.RetweetedTweet.FavoriteCount + ", " +
+                                    "QuoteCount = " + tweet.RetweetedTweet.QuoteCount +
+                                    " WHERE TweetID = " + tweet.RetweetedTweet.Id + ";";
+
+                                RetweetCmd.ExecuteNonQuery();
+                            }
+                            else
+                            {
+                                reader.Close();
+                                RetweetCmd.ExecuteNonQuery();
+                            }
+                        }
+
                     }
-                    finally
+                    if (tweet.QuotedTweet != null)
                     {
-                        conn.Close();
+                        QuoteCmd.Connection = conn;
+
+                        using (SqlCommand cmd = new SqlCommand())
+                        {
+                            cmd.Connection = conn;
+                            cmd.CommandText = "SELECT 1 FROM QuotedTweets WHERE TweetID = " + tweet.QuotedTweet.Id + ";";
+                            SqlDataReader reader = cmd.ExecuteReader();
+                            if (reader.HasRows)
+                            {
+                                reader.Close();
+
+                                QuoteCmd.CommandText = "UPDATE QuotedTweets " +
+                                    "SET RetweetCount = " + tweet.QuotedTweet.RetweetCount + ", " +
+                                    "FavouriteCount = " + tweet.QuotedTweet.FavoriteCount + ", " +
+                                    "QuotedCount = " + tweet.QuotedTweet.QuoteCount +
+                                    " WHERE TweetID = " + tweet.QuotedTweet.Id + ";";
+
+                                QuoteCmd.ExecuteNonQuery();
+                            }
+                            else
+                            {
+                                reader.Close();
+                                QuoteCmd.ExecuteNonQuery();
+                            }
+                        }
                     }
+                    
+                    rowCounter++;
+                }
+                catch (SqlException exc)
+                {
+                    Debug.WriteLine(exc.Message);
+                }
+                finally
+                {
+                    conn.Close();
                 }
             }
         }
