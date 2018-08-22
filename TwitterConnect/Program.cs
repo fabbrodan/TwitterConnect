@@ -24,7 +24,7 @@ namespace TwitterConnect
         private static bool feedAlive;
         private static bool timerAlive;
 
-        private const string connectionString = "Server=localhost\\SQLEXPRESS; Initial Catalog=TwitterData; User ID=sa; Password=Password123";
+        private const string connectionString = "Server=localhost; Database=TwitterData; User ID=root; Password=Ester123";
         private static SqlConnection conn;
 
         static void Main(string[] args)
@@ -34,9 +34,10 @@ namespace TwitterConnect
                 "1629853610-0YqP6mkA1fBDy3RpPfXcgEvj9J1wCYm3pdjpeQC",
                 "qQZqhIAQDQb0K0Q6ZCaFyyGyfmsyvvG3UOfBjCBaH11El");
 
-            
-            Console.WriteLine("Enter tracking term");
-            streamTerm = Console.ReadLine();
+
+            //Console.WriteLine("Enter tracking term");
+            streamTerm = args[0];
+            Console.WriteLine(streamTerm);
             string operation = "stream";
             while (operation != "exit" && operation == "stream")
             {
@@ -199,7 +200,7 @@ namespace TwitterConnect
                 SqlCommand QuoteCmd = new SqlCommand();
 
                 SqlCommand TweetCmd = new SqlCommand("INSERT INTO Tweets VALUES(" +
-                "@UserID, @UserName, @UserLocation, @TweetID, @TweetText, @RetweetID, @QuoteID, @RetweetCount, @FavouriteCount, @Keywords, @QuoteCount, @Published, @URL);");
+                "@UserID, @UserName, @UserLocation, @TweetID, @TweetText, @RetweetID, @QuoteID, @RetweetCount, @FavouriteCount, @QuoteCount, @Keywords, @Published, @URL);");
 
                 TweetCmd.Parameters.AddWithValue(@"@UserID", tweet.CreatedBy.Id);
                 TweetCmd.Parameters.AddWithValue(@"@UserName", tweet.CreatedBy.ToString());
@@ -319,7 +320,8 @@ namespace TwitterConnect
                 }
                 catch (SqlException exc)
                 {
-                    Debug.WriteLine(exc.Message);
+                    Console.BackgroundColor = ConsoleColor.Red;
+                    Console.WriteLine(exc.Message);
                 }
                 finally
                 {
